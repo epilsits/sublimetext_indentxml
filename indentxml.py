@@ -2,6 +2,48 @@ import sublime
 import sublime_plugin
 import re
 import json
+
+#monkey patch the minidom Element class
+import xml.dom.minidom
+from collections import OrderedDict
+
+class ElementClsOverride(xml.dom.minidom.Element):
+
+    def _ensure_attributes(self):
+        if self._attrs is None:
+            self._attrs = OrderedDict()
+            self._attrsNS = OrderedDict()
+    
+    def writexml(self, writer, indent="", addindent="", newl=""):
+        # indent = current indentation
+        # addindent = indentation to add to higher levels
+        # newl = newline string
+        writer.write(indent+"<" + self.tagName)
+
+        attrs = self._get_attributes()
+        #a_names = sorted(attrs.keys())
+        a_names = attrs.keys()
+
+        for a_name in a_names:
+            writer.write(" %s=\"" % a_name)
+            xml.dom.minidom._write_data(writer, attrs[a_name].value)
+            writer.write("\"")
+        if self.childNodes:
+            writer.write(">")
+            if (len(self.childNodes) == 1 and
+                self.childNodes[0].nodeType == xml.dom.Node.TEXT_NODE):
+                self.childNodes[0].writexml(writer, '', '', '')
+            else:
+                writer.write(newl)
+                for node in self.childNodes:
+                    node.writexml(writer, indent+addindent, addindent, newl)
+                writer.write(indent)
+            writer.write("</%s>%s" % (self.tagName, newl))
+        else:
+            writer.write("/>%s"%(newl))
+
+xml.dom.minidom.Element = ElementClsOverride
+
 from xml.dom.minidom import parseString
 from xml.parsers.expat import ExpatError, errors
 from os.path import basename, splitext
