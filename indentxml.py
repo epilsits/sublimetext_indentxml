@@ -2,52 +2,8 @@ import sublime
 import sublime_plugin
 import re
 import json
-
-#monkey patch the minidom Element class
-import xml.dom.minidom
-from collections import OrderedDict
-
-class ElementClsOverride(xml.dom.minidom.Element):
-
-    def _ensure_attributes(self):
-        if self._attrs is None:
-            self._attrs = OrderedDict()
-            self._attrsNS = OrderedDict()
-    
-    def writexml(self, writer, indent="", addindent="", newl=""):
-        # indent = current indentation
-        # addindent = indentation to add to higher levels
-        # newl = newline string
-        writer.write(indent+"<" + self.tagName)
-
-        attrs = self._get_attributes()
-        #a_names = sorted(attrs.keys())
-        a_names = attrs.keys()
-
-        for a_name in a_names:
-            writer.write(" %s=\"" % a_name)
-            xml.dom.minidom._write_data(writer, attrs[a_name].value)
-            writer.write("\"")
-        if self.childNodes:
-            writer.write(">")
-            if (len(self.childNodes) == 1 and
-                self.childNodes[0].nodeType == xml.dom.Node.TEXT_NODE):
-                self.childNodes[0].writexml(writer, '', '', '')
-            else:
-                writer.write(newl)
-                for node in self.childNodes:
-                    node.writexml(writer, indent+addindent, addindent, newl)
-                writer.write(indent)
-            writer.write("</%s>%s" % (self.tagName, newl))
-        else:
-            writer.write("/>%s"%(newl))
-
-xml.dom.minidom.Element = ElementClsOverride
-
-from xml.dom.minidom import parseString
-from xml.parsers.expat import ExpatError, errors
 from os.path import basename, splitext
-
+from lxml import etree
 
 class BaseIndentCommand(sublime_plugin.TextCommand):
   
@@ -87,12 +43,14 @@ class BaseIndentCommand(sublime_plugin.TextCommand):
                 if not region.empty():
                     s = view.substr(region).strip()
                     s = self.indent(s)
-                    view.replace(edit, region, s)
+                    if s:
+                        view.replace(edit, region, s)
         else:  # format all text
             alltextreg = sublime.Region(0, view.size())
             s = view.substr(alltextreg).strip()
             s = self.indent(s)
-            view.replace(edit, alltextreg, s)
+            if s:
+                view.replace(edit, alltextreg, s)
 
 
 class AutoIndentCommand(BaseIndentCommand):
@@ -130,33 +88,63 @@ class IndentXmlCommand(BaseIndentCommand):
 
     def indent(self, s):
         # figure out encoding
-        utfEncoded = s.encode("utf-8")
+        idx = re.search(r"[\r\n]", s)
+        idx = idx.start() if idx is not None else None
+        utfEncoded = s[:idx].encode("utf-8")
         encoding = "utf-8"
-        encodingMatch = re.compile(b"<\?.*encoding=\"(.*?)\".*\?>").match(utfEncoded)
+        encodingMatch = re.match(b"<\\?.*encoding=['\"](.*?)['\"].*\\?>", utfEncoded)
         if encodingMatch:
             encoding = encodingMatch.group(1).decode("utf-8").lower()
+        utfEncoded = None
 
         s = s.encode(encoding)
-        xmlheader = re.compile(b"<\?.*\?>").match(s)
-        # convert to plain string without indents and spaces
-        s = re.compile(b'>\s+([^\s])', re.DOTALL).sub(b'>\g<1>', s)
-        # replace tags to convince minidom process cdata as text
-        s = s.replace(b'<![CDATA[', b'%CDATAESTART%').replace(b']]>', b'%CDATAEEND%')
+        xmlheader = True if re.match(br"<\?.*\?>", s) is not None else False
         try:
-            s = parseString(s).toprettyxml()
-        except ExpatError as err:
-            message = "Invalid XML: %s line:%d:col:%d" % (errors.messages[err.code], err.lineno, err.offset)
+            parser = etree.XMLParser(remove_blank_text=True, strip_cdata=False)
+            #xml = etree.fromstring(s, parser)
+            #s = self.prettify(xml)
+            s = etree.tostring(etree.fromstring(s, parser), pretty_print=True, xml_declaration=xmlheader, encoding=encoding).decode(encoding)
+        except etree.LxmlError as err:
+            message = "Invalid XML: %s" % (err)
             sublime.status_message(message)
             return
-        # remove line breaks
-        s = re.compile('>\n\s+([^<>\s].*?)\n\s+</', re.DOTALL).sub('>\g<1></', s)
-        # restore cdata
-        s = s.replace('%CDATAESTART%', '<![CDATA[').replace('%CDATAEEND%', ']]>')
-        # remove xml header
-        s = s.replace("<?xml version=\"1.0\" ?>", "").strip()
-        if xmlheader:
-            s = xmlheader.group().decode(encoding) + "\n" + s
+        
+        # change default two space indent to tab, respect multiline text nodes and CDATA
+        isCdata = False
+        L = []
+        startCdata = re.compile(r".*<!\[CDATA\[")
+        endCdata = re.compile(r".*\]\]>")
+        # leading pairs of spaces, only if on a line beginning with an xml node, NOT a multiline text node
+        leadingSpace = re.compile("  (?= *<)")
+        for line in s.splitlines():
+            if isCdata:
+                L.append(line)
+                isCdata = not endCdata.match(line)
+            else:
+                L.append(leadingSpace.sub("\t", line))
+                isCdata = startCdata.match(line)
+            
+        s = "\n".join(L)
         return s
+
+    """
+    # example of pretty print using an XSLT transform
+    def prettify(self, someXML):
+        #for more on lxml/XSLT see: http://lxml.de/xpathxslt.html#xslt-result-objects
+        xslt_tree = etree.XML('''\
+            <!-- XSLT taken from Comment 4 by Michael Kay found here:
+            http://www.dpawson.co.uk/xsl/sect2/pretty.html#d8621e19 -->
+            <xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+                <xsl:output method="xml" indent="yes" encoding="UTF-8" omit-xml-declaration="yes"/>
+                <xsl:strip-space elements="*"/>
+                <xsl:template match="/">
+                    <xsl:copy-of select="."/>
+                </xsl:template>
+            </xsl:stylesheet>''')
+        transform = etree.XSLT(xslt_tree)
+        result = transform(someXML)
+        return str(result)
+    """
 
     def check_enabled(self, language):
         return ((language == "xml") or (language == "plain text"))
