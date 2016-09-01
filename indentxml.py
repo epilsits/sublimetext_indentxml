@@ -4,12 +4,14 @@ import re
 import json
 from os.path import basename, splitext
 from lxml import etree
+from collections import OrderedDict
 
 class BaseIndentCommand(sublime_plugin.TextCommand):
   
     def __init__(self, view):
         self.view = view
         self.language = self.get_language()
+        self.settings = sublime.load_settings("Indent XML.sublime-settings")
 
     def get_language(self):
         syntax = self.view.settings().get('syntax')
@@ -51,6 +53,7 @@ class BaseIndentCommand(sublime_plugin.TextCommand):
             s = self.indent(s)
             if s:
                 view.replace(edit, alltextreg, s)
+                view.run_command("detect_indentation")
 
 
 class AutoIndentCommand(BaseIndentCommand):
@@ -109,22 +112,30 @@ class IndentXmlCommand(BaseIndentCommand):
             sublime.status_message(message)
             return
         
-        # change default two space indent to tab, respect multiline text nodes and CDATA
-        isCdata = False
-        L = []
-        startCdata = re.compile(r".*<!\[CDATA\[")
-        endCdata = re.compile(r".*\]\]>")
-        # leading pairs of spaces, only if on a line beginning with an xml node, NOT a multiline text node
-        leadingSpace = re.compile("  (?= *<)")
-        for line in s.splitlines():
-            if isCdata:
-                L.append(line)
-                isCdata = not endCdata.match(line)
-            else:
-                L.append(leadingSpace.sub("\t", line))
-                isCdata = startCdata.match(line)
-            
-        s = "\n".join(L)
+        # update indent if different from lxml default 2 spaces, respect multiline text nodes and CDATA
+        settings_indent = self.settings.get("xml_indent", 4)
+        if isinstance(settings_indent, int):
+            indent_string = ''.ljust(settings_indent)
+        else:
+            indent_string = settings_indent
+
+        if indent_string != '  ':
+            isCdata = False
+            L = []
+            startCdata = re.compile(r".*<!\[CDATA\[")
+            endCdata = re.compile(r".*\]\]>")
+            # leading pairs of spaces, only if on a line beginning with an xml node, NOT a multiline text node
+            leadingSpace = re.compile("  (?= *<)")
+            for line in s.splitlines():
+                if isCdata:
+                    L.append(line)
+                    isCdata = not endCdata.match(line)
+                else:
+                    L.append(leadingSpace.sub(indent_string, line))
+                    isCdata = startCdata.match(line)
+                
+            s = "\n".join(L)
+
         return s
 
     """
@@ -156,5 +167,72 @@ class IndentJsonCommand(BaseIndentCommand):
         return ((language == "json") or (language == "plain text"))
 
     def indent(self, s):
-        parsed = json.loads(s)
-        return json.dumps(parsed, sort_keys=True, indent=4, separators=(',', ': '), ensure_ascii=False)
+        settings_indent = self.settings.get("json_indent", 4)
+        settings_sortkeys = self.settings.get("json_sortkeys", False)
+        try:
+            # Need to use OrderedDict here to preserve original order if not sorting keys during pretty print
+            parsed = json.loads(Utilities.json_minify(s), object_pairs_hook=None if settings_sortkeys else OrderedDict)
+            return json.dumps(parsed, sort_keys=settings_sortkeys, indent=settings_indent, separators=(',', ': '), ensure_ascii=False)
+        except ValueError as err:
+            message = "Invalid JSON: %s" % (err)
+            sublime.status_message(message)
+
+class Utilities:
+
+    """A port of the `JSON-minify` utility to the Python language.
+    Based on JSON.minify.js: https://github.com/getify/JSON.minify
+    Contributers:
+    - Gerald Storer
+        - Contributed original version
+    - Felipe Machado
+        - Performance optimization
+    - Pradyun S. Gedam
+        - Conditions and variable names changed
+        - Reformatted tests and moved to separate file
+        - Made into a PyPI Package
+    """
+    @staticmethod
+    def json_minify(string, strip_space=True):
+        tokenizer = re.compile('"|(/\*)|(\*/)|(//)|\n|\r')
+        end_slashes_re = re.compile(r'(\\)*$')
+
+        in_string = False
+        in_multi = False
+        in_single = False
+
+        new_str = []
+        index = 0
+
+        for match in re.finditer(tokenizer, string):
+
+            if not (in_multi or in_single):
+                tmp = string[index:match.start()]
+                if not in_string and strip_space:
+                    # replace white space as defined in standard
+                    tmp = re.sub('[ \t\n\r]+', '', tmp)
+                new_str.append(tmp)
+
+            index = match.end()
+            val = match.group()
+
+            if val == '"' and not (in_multi or in_single):
+                escaped = end_slashes_re.search(string, 0, match.start())
+
+                # start of string or unescaped quote character to end string
+                if not in_string or (escaped is None or len(escaped.group()) % 2 == 0):  # noqa
+                    in_string = not in_string
+                index -= 1  # include " character in next catch
+            elif not (in_string or in_multi or in_single):
+                if val == '/*':
+                    in_multi = True
+                elif val == '//':
+                    in_single = True
+            elif val == '*/' and in_multi and not (in_string or in_single):
+                in_multi = False
+            elif val in '\r\n' and not (in_multi or in_string) and in_single:
+                in_single = False
+            elif not ((in_multi or in_single) or (val in ' \r\n\t' and strip_space)):  # noqa
+                new_str.append(val)
+
+        new_str.append(string[index:])
+        return ''.join(new_str)

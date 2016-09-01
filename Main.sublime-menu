@@ -2,13 +2,11 @@
     {
         "id": "selection",
         "caption": "Selection",
-        "children":
-        [
+        "children": [
             {
                 "id": "format",
                 "caption": "Format",
-                "children":
-                [
+                "children": [
                     {
                         "caption": "Auto indent",
                         "command": "auto_indent"
@@ -20,6 +18,39 @@
                     {
                         "caption": "Indent JSON",
                         "command": "indent_json"
+                    }
+                ]
+            }
+        ]
+    },
+    {
+        "mnemonic": "n",
+        "caption": "Preferences",
+        "id": "preferences",
+        "children": [
+            {
+                "mnemonic": "P",
+                "caption": "Package Settings",
+                "id": "package-settings",
+                "children": [
+                    {
+                        "caption": "Indent XML",
+                        "children": [
+                            {
+                                "caption": "Settings – Default",
+                                "args": {
+                                    "file": "${packages}/sublimetext_indentxml/Indent XML.sublime-settings"
+                                },
+                                "command": "open_file"
+                            },
+                            {
+                                "caption": "Settings – User",
+                                "args": {
+                                    "file": "${packages}/User/Indent XML.sublime-settings"
+                                },
+                                "command": "open_file"
+                            }
+                        ]
                     }
                 ]
             }
