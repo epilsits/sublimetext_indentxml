@@ -3,5 +3,7 @@
     "json_indent": 4,
     "xml_indent": 4,
     // Key sorting
-    "json_sortkeys": false
+    "json_sortkeys": false,
+    // Restrict usage based on language settings
+    "restrict_lang": false
 }

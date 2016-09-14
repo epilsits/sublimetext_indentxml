@@ -10,7 +10,6 @@ class BaseIndentCommand(sublime_plugin.TextCommand):
   
     def __init__(self, view):
         self.view = view
-        self.language = self.get_language()
         self.settings = sublime.load_settings("Indent XML.sublime-settings")
 
     def get_language(self):
@@ -28,10 +27,9 @@ class BaseIndentCommand(sublime_plugin.TextCommand):
         'Plain Text'. This helps clarify to the user about when the command can
         be executed, especially useful for UI controls.
         """
-        if self.view is None:
-            return False
-
-        return self.check_enabled(self.get_language())
+        return False if self.view is None or \
+            (self.settings.get("restrict_lang", False) and not self.check_enabled(self.get_language())) \
+            else True
 
     def run(self, edit):
         """
@@ -59,7 +57,7 @@ class BaseIndentCommand(sublime_plugin.TextCommand):
 class AutoIndentCommand(BaseIndentCommand):
 
     def get_text_type(self, s):
-        language = self.language
+        language = self.get_language()
         if language == 'xml':
             return 'xml'
         if language == 'json':
